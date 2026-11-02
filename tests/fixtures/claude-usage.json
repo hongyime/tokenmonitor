@@ -1,0 +1,19 @@
+{
+  "subscriptionType": "max",
+  "five_hour": {
+    "utilization": 42.5,
+    "resets_at": "2026-11-02T18:00:00Z"
+  },
+  "seven_day": {
+    "utilization": 18,
+    "resets_at": "2026-11-08T18:00:00Z"
+  },
+  "seven_day_opus": {
+    "utilization": 55,
+    "resets_at": "2026-11-08T18:00:00Z"
+  },
+  "spend": {
+    "used": { "amount_minor": 125 },
+    "limit": { "amount_minor": 1000, "currency": "USD" }
+  }
+}

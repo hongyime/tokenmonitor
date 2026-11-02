@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "research_sources": [
+    {
+      "id": "opencode",
+      "role": "provider-catalog-and-auth-reference",
+      "note": "Use OpenCode metadata to identify upstream providers, auth methods, and model configuration. Do not treat OpenCode as a quota provider."
+    },
+    {
+      "id": "orca",
+      "role": "agent-host-and-account-management-reference",
+      "note": "Use Orca account and usage tracking as prior art for underlying agent accounts. Do not treat Orca as an inference provider."
+    }
+  ],
+  "adapters": [
+    {
+      "id": "claude-code-subscription",
+      "display_name": "Claude Code",
+      "kind": "subscription_quota",
+      "status": "implemented",
+      "contract": "private-cli-usage",
+      "normalizer": "providers/normalize.sh:normalize_claude_snapshot"
+    },
+    {
+      "id": "codex-subscription",
+      "display_name": "OpenAI Codex",
+      "kind": "subscription_quota",
+      "status": "implemented",
+      "contract": "private-cli-usage",
+      "normalizer": "providers/normalize.sh:normalize_codex_snapshot"
+    },
+    {
+      "id": "gemini-cli-subscription",
+      "display_name": "Gemini CLI",
+      "kind": "subscription_quota",
+      "status": "researched",
+      "contract": "cloudcode-private-quota"
+    },
+    {
+      "id": "grok-coding-plan",
+      "display_name": "Grok",
+      "kind": "subscription_quota",
+      "status": "researched",
+      "contract": "cli-proxy-billing"
+    },
+    {
+      "id": "cursor",
+      "display_name": "Cursor",
+      "kind": "subscription_quota",
+      "status": "researched",
+      "contract": "dashboard-session"
+    },
+    {
+      "id": "kimi-code",
+      "display_name": "Kimi Code",
+      "kind": "subscription_quota",
+      "status": "researched",
+      "contract": "cli-usage-endpoint"
+    },
+    {
+      "id": "opencode-go",
+      "display_name": "OpenCode Go",
+      "kind": "subscription_quota",
+      "status": "researched",
+      "contract": "provider-specific"
+    },
+    {
+      "id": "openrouter",
+      "display_name": "OpenRouter",
+      "kind": "api_usage",
+      "status": "planned",
+      "contract": "documented-credits-and-limits"
+    }
+  ]
+}

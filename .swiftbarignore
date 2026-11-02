@@ -8,3 +8,5 @@ assets/
 *.bat
 *.vbs
 *.ps1
+providers/
+tests/

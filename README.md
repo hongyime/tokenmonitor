@@ -2,7 +2,7 @@
 
 Know exactly how much Claude Code (and now OpenAI Codex) you have left — right from your menu bar.
 
-A lightweight widget that tracks your **remaining** rate limits in real time, tells you when you're burning too fast, and alerts you before you run out. Available for **macOS** (SwiftBar) and **Windows** (system tray).
+A lightweight widget that tracks verified **remaining** rate limits in real time, tells you when you're burning too fast, and alerts you before you run out. Available for **macOS** (SwiftBar) and **Windows** (system tray).
 
 **New in v12.2:** Windows now supports Codex too. The tray works with Claude only, Codex only, or both, and uses different shapes so CC and CX are easy to tell apart.
 
@@ -97,9 +97,21 @@ At a glance: 🟢 >50% left · 🟡 20–50% left · 🔴 <20% left
 
 ## Features
 
-**Two tools, one menu bar** — tracks Claude Code and OpenAI Codex. The bar rotates between them, the dropdown lists both, and it works with whichever you're signed into. No Codex? It behaves exactly like the Claude-only version. No Claude? It shows just Codex.
+**Two tools, one menu bar** — tracks Claude Code and OpenAI Codex. The bar rotates between them, the dropdown lists both, and it works with whichever you're signed into.
 
 **See what's left** — for Claude: 5-hour session, 7-day window, per-model sub-limits (Sonnet and Opus, when your plan reports them), and your pay-as-you-go Extra Usage balance. For Codex: whichever rate-limit windows the API reports, plus credits when reported.
+
+### Provider support model
+
+OpenCode and Orca are research inputs, not providers displayed by this monitor. OpenCode exposes provider metadata and auth methods for 75+ upstream providers; Orca demonstrates account switching and usage tracking for agent hosts. We use that knowledge to build first-party adapters for the underlying services:
+
+| Source | Discovery | Usage windows | Local credential file |
+|---|---|---:|---|
+| Claude Code | automatic | Yes | macOS Keychain / Windows Claude credentials |
+| OpenAI Codex | automatic | Yes | `~/.codex/auth.json` |
+| OpenRouter/OpenAI/etc. | adapter-specific | Only when the service exposes usage data | Provider-specific |
+
+New provider adapters should add a documented endpoint, authentication contract, response fixture, cache key, and tests before showing percentages.
 
 **Know when it resets** — countdown timer + local time, e.g., "Refills in 1h 49m (4:00 PM)". No timezone math needed.
 
@@ -246,8 +258,8 @@ NOTIFY_THRESHOLDS="50 25 10"
 
 ## How It Works
 
-1. Reads your Claude Code OAuth token (macOS Keychain / Windows credentials file) and, if present, your Codex token from `~/.codex/auth.json`
-2. Checks each provider's usage API — Anthropic's `oauth/usage` for Claude, ChatGPT's `wham/usage` for Codex
+1. Reads your Claude Code OAuth token (macOS Keychain / Windows credentials file) and your Codex token from `~/.codex/auth.json`
+2. Checks verified usage APIs — Anthropic's `oauth/usage` for Claude and ChatGPT's `wham/usage` for Codex
 3. Caches each response locally to avoid hitting rate limits
 4. Calculates remaining %, pace, and burnout projection
 5. Renders in the menu bar / system tray (macOS rotates between providers)

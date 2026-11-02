@@ -354,6 +354,12 @@ if [ -x /opt/homebrew/bin/jq ]; then
 else
   JQ=/usr/local/bin/jq
 fi
+JQ_BIN="$JQ"
+PROVIDER_NORMALIZER="$(dirname "$0")/providers/normalize.sh"
+if [ -f "$PROVIDER_NORMALIZER" ]; then
+  # shellcheck source=/dev/null
+  . "$PROVIDER_NORMALIZER"
+fi
 
 # ============================================================
 # AUTH — both providers optional; show whatever is logged in
@@ -506,14 +512,42 @@ fi
 # PARSE (Claude)
 # ============================================================
 if [ "$CLAUDE_OK" = true ]; then
-five_hr_used=$(echo "$USAGE" | $JQ -r 'if .five_hour then .five_hour.utilization // 0 else empty end')
-five_hr_reset=$(echo "$USAGE" | $JQ -r 'if .five_hour then .five_hour.resets_at // empty else empty end')
-seven_day_used=$(echo "$USAGE" | $JQ -r 'if .seven_day then .seven_day.utilization // 0 else empty end')
-seven_day_reset=$(echo "$USAGE" | $JQ -r 'if .seven_day then .seven_day.resets_at // empty else empty end')
-opus_used=$(echo "$USAGE" | $JQ -r 'if .seven_day_opus then .seven_day_opus.utilization // empty else empty end')
-opus_reset=$(echo "$USAGE" | $JQ -r 'if .seven_day_opus then .seven_day_opus.resets_at // empty else empty end')
-sonnet_used=$(echo "$USAGE" | $JQ -r 'if .seven_day_sonnet then .seven_day_sonnet.utilization // empty else empty end')
-sonnet_reset=$(echo "$USAGE" | $JQ -r 'if .seven_day_sonnet then .seven_day_sonnet.resets_at // empty else empty end')
+if type normalize_claude_snapshot >/dev/null 2>&1; then
+  claude_snapshot_status="live"
+  case "$FETCH_STATUS" in
+    cached*) claude_snapshot_status="cached" ;;
+    *stale*|*rate*) claude_snapshot_status="stale" ;;
+  esac
+  claude_fetched_at=$(date -u "+%Y-%m-%dT%H:%M:%SZ")
+  claude_account_id=$(echo "$USAGE" | $JQ -r '.subscriptionType // "claude-code-subscription"')
+  CLAUDE_SNAPSHOT=$(normalize_claude_snapshot "$USAGE" "$claude_snapshot_status" \
+    "claude-code-subscription" "$claude_account_id" "$claude_fetched_at" 2>/dev/null) || {
+    log "WARN" "Claude usage failed provider snapshot validation"
+    CLAUDE_OK=false
+  }
+fi
+fi
+
+if [ "$CLAUDE_OK" = true ]; then
+if type normalize_claude_snapshot >/dev/null 2>&1; then
+  five_hr_used=$(echo "$CLAUDE_SNAPSHOT" | $JQ -r '.windows[] | select(.id == "five_hour") | .used_percent')
+  five_hr_reset=$(echo "$CLAUDE_SNAPSHOT" | $JQ -r '.windows[] | select(.id == "five_hour") | .reset_at // empty')
+  seven_day_used=$(echo "$CLAUDE_SNAPSHOT" | $JQ -r '.windows[] | select(.id == "seven_day") | .used_percent // empty')
+  seven_day_reset=$(echo "$CLAUDE_SNAPSHOT" | $JQ -r '.windows[] | select(.id == "seven_day") | .reset_at // empty')
+  opus_used=$(echo "$CLAUDE_SNAPSHOT" | $JQ -r '.windows[] | select(.id == "seven_day_opus") | .used_percent // empty')
+  opus_reset=$(echo "$CLAUDE_SNAPSHOT" | $JQ -r '.windows[] | select(.id == "seven_day_opus") | .reset_at // empty')
+  sonnet_used=$(echo "$CLAUDE_SNAPSHOT" | $JQ -r '.windows[] | select(.id == "seven_day_sonnet") | .used_percent // empty')
+  sonnet_reset=$(echo "$CLAUDE_SNAPSHOT" | $JQ -r '.windows[] | select(.id == "seven_day_sonnet") | .reset_at // empty')
+else
+  five_hr_used=$(echo "$USAGE" | $JQ -r '.five_hour.utilization // empty')
+  five_hr_reset=$(echo "$USAGE" | $JQ -r '.five_hour.resets_at // empty')
+  seven_day_used=$(echo "$USAGE" | $JQ -r '.seven_day.utilization // empty')
+  seven_day_reset=$(echo "$USAGE" | $JQ -r '.seven_day.resets_at // empty')
+  opus_used=$(echo "$USAGE" | $JQ -r '.seven_day_opus.utilization // empty')
+  opus_reset=$(echo "$USAGE" | $JQ -r '.seven_day_opus.resets_at // empty')
+  sonnet_used=$(echo "$USAGE" | $JQ -r '.seven_day_sonnet.utilization // empty')
+  sonnet_reset=$(echo "$USAGE" | $JQ -r '.seven_day_sonnet.resets_at // empty')
+fi
 
 # Extra Usage (pay-as-you-go credits) — separate from the rate-limit windows
 extra_enabled=$(echo "$USAGE" | $JQ -r '.spend.enabled // false')
@@ -1059,12 +1093,37 @@ if [ "$HAS_CODEX" = true ]; then
   fi
 
   if [ "$CODEX_OK" = true ]; then
-    cx_primary_used=$(echo "$CODEX_USAGE" | $JQ -r '.rate_limit.primary_window.used_percent // empty')
-    cx_primary_reset=$(echo "$CODEX_USAGE" | $JQ -r '.rate_limit.primary_window.reset_at // empty')
-    cx_primary_secs=$(echo "$CODEX_USAGE" | $JQ -r '.rate_limit.primary_window.limit_window_seconds // empty')
-    cx_secondary_used=$(echo "$CODEX_USAGE" | $JQ -r '.rate_limit.secondary_window.used_percent // empty')
-    cx_secondary_reset=$(echo "$CODEX_USAGE" | $JQ -r '.rate_limit.secondary_window.reset_at // empty')
-    cx_secondary_secs=$(echo "$CODEX_USAGE" | $JQ -r '.rate_limit.secondary_window.limit_window_seconds // empty')
+    if type normalize_codex_snapshot >/dev/null 2>&1; then
+      codex_snapshot_status="live"
+      case "$CODEX_STATUS" in
+        cached*) codex_snapshot_status="cached" ;;
+        *stale*|*rate*) codex_snapshot_status="stale" ;;
+      esac
+      codex_fetched_at=$(date -u "+%Y-%m-%dT%H:%M:%SZ")
+      CODEX_SNAPSHOT=$(normalize_codex_snapshot "$CODEX_USAGE" "$codex_snapshot_status" \
+        "codex-subscription" "$cx_acct" "$codex_fetched_at" 2>/dev/null) || {
+        log "WARN" "Codex usage failed provider snapshot validation"
+        CODEX_OK=false
+      }
+    fi
+  fi
+
+  if [ "$CODEX_OK" = true ]; then
+    if type normalize_codex_snapshot >/dev/null 2>&1; then
+      cx_primary_used=$(echo "$CODEX_SNAPSHOT" | $JQ -r '.windows[] | select(.id == "primary") | .used_percent')
+      cx_primary_reset=$(echo "$CODEX_SNAPSHOT" | $JQ -r '.windows[] | select(.id == "primary") | .reset_at // empty')
+      cx_primary_secs=$(echo "$CODEX_SNAPSHOT" | $JQ -r '.windows[] | select(.id == "primary") | .duration_seconds // empty')
+      cx_secondary_used=$(echo "$CODEX_SNAPSHOT" | $JQ -r '.windows[] | select(.id == "secondary") | .used_percent // empty')
+      cx_secondary_reset=$(echo "$CODEX_SNAPSHOT" | $JQ -r '.windows[] | select(.id == "secondary") | .reset_at // empty')
+      cx_secondary_secs=$(echo "$CODEX_SNAPSHOT" | $JQ -r '.windows[] | select(.id == "secondary") | .duration_seconds // empty')
+    else
+      cx_primary_used=$(echo "$CODEX_USAGE" | $JQ -r '.rate_limit.primary_window.used_percent // empty')
+      cx_primary_reset=$(echo "$CODEX_USAGE" | $JQ -r '.rate_limit.primary_window.reset_at // empty')
+      cx_primary_secs=$(echo "$CODEX_USAGE" | $JQ -r '.rate_limit.primary_window.limit_window_seconds // empty')
+      cx_secondary_used=$(echo "$CODEX_USAGE" | $JQ -r '.rate_limit.secondary_window.used_percent // empty')
+      cx_secondary_reset=$(echo "$CODEX_USAGE" | $JQ -r '.rate_limit.secondary_window.reset_at // empty')
+      cx_secondary_secs=$(echo "$CODEX_USAGE" | $JQ -r '.rate_limit.secondary_window.limit_window_seconds // empty')
+    fi
     cx_plan=$(echo "$CODEX_USAGE" | $JQ -r '.plan_type // "codex"')
     cx_credits_has=$(echo "$CODEX_USAGE" | $JQ -r '.credits.has_credits // empty')
     cx_credits_bal=$(echo "$CODEX_USAGE" | $JQ -r '.credits.balance // empty')
@@ -1253,6 +1312,7 @@ if [ "$CODEX_OK" = true ]; then
   echo "---"
   echo "$L_SOURCE: Codex ${CODEX_STATUS} | size=$S $(c "$TEXT_SECONDARY") bash='true' terminal=false"
 fi
+
 echo "---"
 echo "$L_REFRESH | bash='$SCRIPT_DIR/force-refresh.sh' terminal=false refresh=true $(c "$TEXT_SECONDARY") size=$S"
 echo "$L_OPEN_LOG | bash='open' param1='$LOG_FILE' terminal=false $(c "$TEXT_SECONDARY") size=$S"

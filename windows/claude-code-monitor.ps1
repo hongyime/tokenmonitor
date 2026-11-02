@@ -348,6 +348,7 @@ function Get-CodexUsage {
         $auth = Get-Content $script:CodexAuthFile -Raw | ConvertFrom-Json
         $accessToken = $auth.tokens.access_token
         $accountId = $auth.tokens.account_id
+        $script:CodexAccountId = $accountId
         if ([string]::IsNullOrEmpty($accessToken)) {
             $script:CodexFetchStatus = "no token"
             return $null
@@ -746,21 +747,119 @@ function Get-CodexWindowLabel {
     return "limit"
 }
 
+function ConvertTo-ClaudeSnapshot {
+    param(
+        $Usage,
+        [string]$Status = "live",
+        [string]$CacheKey = "claude-code-subscription",
+        [string]$AccountId = "",
+        [string]$FetchedAt = ""
+    )
+    if (-not $Usage -or -not $Usage.five_hour -or $null -eq $Usage.five_hour.utilization) {
+        return $null
+    }
+    $windows = @([pscustomobject]@{
+        id = "five_hour"; label = "5h"
+        used_percent = [double]$Usage.five_hour.utilization
+        remaining_percent = 100 - [double]$Usage.five_hour.utilization
+        reset_at = $Usage.five_hour.resets_at
+        duration_seconds = 18000; scope = "account"
+    })
+    if ($Usage.seven_day -and $null -ne $Usage.seven_day.utilization) {
+        $windows += [pscustomobject]@{
+            id = "seven_day"; label = "7d"
+            used_percent = [double]$Usage.seven_day.utilization
+            remaining_percent = 100 - [double]$Usage.seven_day.utilization
+            reset_at = $Usage.seven_day.resets_at
+            duration_seconds = 604800; scope = "account"
+        }
+    }
+    return [pscustomobject]@{
+        provider_id = "claude-code-subscription"
+        status = $Status
+        source = "anthropic-oauth-usage"
+        fetched_at = if ($FetchedAt) { $FetchedAt } else { $null }
+        cache_key = $CacheKey
+        windows = $windows
+        credits = @()
+        spend = @()
+        metadata = @{ subscription_type = $script:SubscriptionType; account_id = if ($AccountId) { $AccountId } else { $null } }
+    }
+}
+
+function ConvertTo-CodexSnapshot {
+    param(
+        $Usage,
+        [string]$Status = "live",
+        [string]$CacheKey = "codex-subscription",
+        [string]$AccountId = "",
+        [string]$FetchedAt = ""
+    )
+    if (-not $Usage -or -not $Usage.rate_limit -or -not $Usage.rate_limit.primary_window) {
+        return $null
+    }
+    $primary = $Usage.rate_limit.primary_window
+    if ($null -eq $primary.used_percent) { return $null }
+    $windows = @([pscustomobject]@{
+        id = "primary"; label = "primary"
+        used_percent = [double]$primary.used_percent
+        remaining_percent = 100 - [double]$primary.used_percent
+        reset_at = $primary.reset_at
+        duration_seconds = $primary.limit_window_seconds
+        scope = "account"
+    })
+    $secondary = $Usage.rate_limit.secondary_window
+    if ($secondary -and $null -ne $secondary.used_percent) {
+        $windows += [pscustomobject]@{
+            id = "secondary"; label = "secondary"
+            used_percent = [double]$secondary.used_percent
+            remaining_percent = 100 - [double]$secondary.used_percent
+            reset_at = $secondary.reset_at
+            duration_seconds = $secondary.limit_window_seconds
+            scope = "account"
+        }
+    }
+    return [pscustomobject]@{
+        provider_id = "codex-subscription"
+        status = $Status
+        source = "chatgpt-wham-usage"
+        fetched_at = if ($FetchedAt) { $FetchedAt } else { $null }
+        cache_key = $CacheKey
+        windows = $windows
+        credits = @()
+        spend = @()
+        metadata = @{ plan_type = $Usage.plan_type; account_id = if ($AccountId) { $AccountId } else { $null } }
+    }
+}
+
+function Get-SnapshotWindow {
+    param($Snapshot, [string]$Id)
+    if (-not $Snapshot -or -not $Snapshot.windows) {
+        return $null
+    }
+    return @($Snapshot.windows | Where-Object { $_.id -eq $Id }) | Select-Object -First 1
+}
+
 function Update-Display {
     try {
         $usage = Get-Usage
         $codexUsage = Get-CodexUsage
-
         $script:DisplayData = @{
             HasClaude = $false
             HasCodex = $false
         }
 
         if ($usage -and $usage.five_hour -and $null -ne $usage.five_hour.utilization) {
-            $fiveHrUsed   = [double]$usage.five_hour.utilization
-            $fiveHrReset  = $usage.five_hour.resets_at
-            $sevenDayUsed = [double]$usage.seven_day.utilization
-            $sevenDayReset = $usage.seven_day.resets_at
+            $claudeStatus = if ($script:FetchStatus -like "cached*") { "cached" } elseif ($script:FetchStatus -like "*stale*" -or $script:FetchStatus -like "*rate*") { "stale" } else { "live" }
+            $claudeSnapshot = ConvertTo-ClaudeSnapshot $usage $claudeStatus "claude-code-subscription" $usage.subscriptionType (Get-Date).ToUniversalTime().ToString("o")
+            if (-not $claudeSnapshot) { throw "Claude usage snapshot validation failed" }
+            $fiveHourWindow = Get-SnapshotWindow $claudeSnapshot "five_hour"
+            $sevenDayWindow = Get-SnapshotWindow $claudeSnapshot "seven_day"
+            if (-not $fiveHourWindow) { throw "Claude 5h snapshot window missing" }
+            $fiveHrUsed   = [double]$fiveHourWindow.used_percent
+            $fiveHrReset  = $fiveHourWindow.reset_at
+            $sevenDayUsed = if ($sevenDayWindow) { [double]$sevenDayWindow.used_percent } else { 0 }
+            $sevenDayReset = if ($sevenDayWindow) { $sevenDayWindow.reset_at } else { $null }
 
             $fiveHrLeft   = [Math]::Round(100 - $fiveHrUsed, 1)
             $sevenDayLeft = [Math]::Round(100 - $sevenDayUsed, 1)
@@ -779,10 +878,11 @@ function Update-Display {
             $script:DisplayData["SevenPace"] = Get-Pace $sevenDayUsed $sevenDayReset $script:Window7d
             $script:DisplayData["SevenBurnout"] = Get-Burnout $sevenDayUsed $sevenDayReset $script:Window7d
 
-            if ($usage.seven_day_opus -and $null -ne $usage.seven_day_opus.utilization) {
-                $opusUsed = [double]$usage.seven_day_opus.utilization
+            $opusWindow = Get-SnapshotWindow $claudeSnapshot "seven_day_opus"
+            if ($opusWindow) {
+                $opusUsed = [double]$opusWindow.used_percent
                 $opusLeft = [Math]::Round(100 - $opusUsed, 1)
-                $opusReset = $usage.seven_day_opus.resets_at
+                $opusReset = $opusWindow.reset_at
                 $script:DisplayData["OpusLeft"] = $opusLeft
                 $script:DisplayData["OpusUsed"] = $opusUsed
                 $script:DisplayData["OpusColor"] = Get-ColorTier $opusLeft
@@ -793,11 +893,15 @@ function Update-Display {
         }
 
         if ($codexUsage -and $codexUsage.rate_limit.primary_window -and $null -ne $codexUsage.rate_limit.primary_window.used_percent) {
-            $primary = $codexUsage.rate_limit.primary_window
+            $codexStatus = if ($script:CodexFetchStatus -like "cached*") { "cached" } elseif ($script:CodexFetchStatus -like "*stale*" -or $script:CodexFetchStatus -like "*rate*") { "stale" } else { "live" }
+            $codexSnapshot = ConvertTo-CodexSnapshot $codexUsage $codexStatus "codex-subscription" $script:CodexAccountId (Get-Date).ToUniversalTime().ToString("o")
+            if (-not $codexSnapshot) { throw "Codex usage snapshot validation failed" }
+            $primary = Get-SnapshotWindow $codexSnapshot "primary"
+            if (-not $primary) { throw "Codex primary snapshot window missing" }
             $cxPrimaryUsed = [double]$primary.used_percent
             $cxPrimaryLeft = [Math]::Round(100 - $cxPrimaryUsed, 1)
             $cxPrimaryReset = Convert-CodexReset $primary.reset_at
-            $cxPrimarySecs = if ($primary.limit_window_seconds) { [int]$primary.limit_window_seconds } else { 0 }
+            $cxPrimarySecs = if ($primary.duration_seconds) { [int]$primary.duration_seconds } else { 0 }
 
             $script:DisplayData["HasCodex"] = $true
             $script:DisplayData["CodexPlan"] = if ($codexUsage.plan_type) { $codexUsage.plan_type } else { "codex" }
@@ -809,12 +913,12 @@ function Update-Display {
             $script:DisplayData["CodexPrimaryPace"] = if ($cxPrimarySecs) { Get-Pace $cxPrimaryUsed $cxPrimaryReset $cxPrimarySecs } else { $null }
             $script:DisplayData["CodexPrimaryBurnout"] = if ($cxPrimarySecs) { Get-Burnout $cxPrimaryUsed $cxPrimaryReset $cxPrimarySecs } else { $null }
 
-            $secondary = $codexUsage.rate_limit.secondary_window
-            if ($secondary -and $null -ne $secondary.used_percent) {
+            $secondary = Get-SnapshotWindow $codexSnapshot "secondary"
+            if ($secondary) {
                 $cxSecondaryUsed = [double]$secondary.used_percent
                 $cxSecondaryLeft = [Math]::Round(100 - $cxSecondaryUsed, 1)
                 $cxSecondaryReset = Convert-CodexReset $secondary.reset_at
-                $cxSecondarySecs = if ($secondary.limit_window_seconds) { [int]$secondary.limit_window_seconds } else { 0 }
+                $cxSecondarySecs = if ($secondary.duration_seconds) { [int]$secondary.duration_seconds } else { 0 }
                 $script:DisplayData["HasCodexSecondary"] = $true
                 $script:DisplayData["CodexSecondaryLabel"] = Get-CodexWindowLabel $cxSecondarySecs
                 $script:DisplayData["CodexSecondarySecs"] = $cxSecondarySecs
@@ -1011,6 +1115,7 @@ function Update-ContextMenu {
             $cxSrcItem = $menu.Items.Add("$($script:L.Source): Codex $($script:CodexFetchStatus)")
             $cxSrcItem.Enabled = $false
         }
+
     } else {
         $menu.Items.Add($script:L.NoData).Enabled = $false
     }
